@@ -1,15 +1,15 @@
 # ATSDR PFAS PBPK Water to Serum Estimator
 
 
-## Project Description
+## Description
 The purpose of this project is to produce an R implementation of estimation code for a previously developed web-based calculator to predict individual serum levels of PFAS. 
 A built-for-the-web version of this model runs in a user's browser and is implemented in typescript.js. 
 This R implementation is intended for research, publication, and testing purposes, and will not replace the typescript.js model for web users. It was used in the preparation of the following manuscript: 
 
-**Title:  Estimating PFAS serum levels for individuals with varying exposure and life histories: a physiologically based pharmacokinetic model approach**
+**Meghan T. Lynch, Claire R. Lay, Sara Sokolinski, Adriana Antezana, Carleen Ghio, Weihsueh Chiu, Rachel Rogers. 2023. Community-facing toxicokinetic models to estimate PFAS serum levels based on life history and drinking water exposures. Environment International. 176: 107974. DOI: 10.1016/j.envint.2023.107974.**
 
-**Authors: Meghan T. Lynch, Claire R. Lay, Sara Sokolinski, Adriana Antezana, Carleen Ghio, Brad Firlie, Rachel Rogers, Weihsueh Chiu**
-
+Please note: This code can take considerable time to run due to the iterative nature of the calculations and the design of the data inputs, which were designed to match the implementation in javascript as closely as possible. A more user-friendly and much faster version of this model for processing multiple individual exposure histories at once is currently in development for use in the browser-based web tool. The authors will update this repository with more information on access when it is available.  
+ 
 ## Getting Started
 
 1. To test the code or to run a simulation of an individual, copy this folder to a location with access to R. 
@@ -203,7 +203,6 @@ This function needs the data frame of model results (created by **serum_sensitiv
 ## Contributing Team for this code
 
 **Team Leads (Contacts) : 
-
 [Meghan Lynch](Meghan_Lynch@abtassoc.com)
 [Sara Sokolinksi](Sara_Sokolinski@abtassoc.com)
 [Claire Lay](Claire_Lay@abtassoc.com)
@@ -212,7 +211,6 @@ This function needs the data frame of model results (created by **serum_sensitiv
 
 |Name     |  Email   | 
 |---------|-----------------|
-|[Ryan Klein]| (Ryan_Klein@abtassoc.com)
 |[Carleen Ghio]| (Carleen_Ghio@abtassoc.com)
 |[Adriana Antezana]| (Adriana_Antezana@abtassoc.com)
 
