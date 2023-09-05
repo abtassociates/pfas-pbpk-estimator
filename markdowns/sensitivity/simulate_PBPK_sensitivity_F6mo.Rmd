@@ -1,0 +1,539 @@
+---
+title: "PBPK Model of PFAS Chemicals in Blood Serum - Breast Feeding 6 month old female infant"
+author: "Insert Name of Author"
+date: "`r format(Sys.time(), '%F')`"
+knit: (function(inputFile, encoding) {outdir = file.path(dirname(inputFile), 'markdown', paste0(format(Sys.time(), '%F'))); if(!dir.exists(outdir)){dir.create(outdir, recursive = TRUE)}; rmarkdown::render(inputFile, encoding = encoding, output_format = 'all', output_dir = outdir) })
+output:
+  word_document: default
+  html_document:
+    code_folding: hide
+    df_print: kable
+    toc: yes
+    toc_depth: 5
+---
+
+The purpose of this model is to calculate the amount of PFAS, PFOA, PFHxS or PFNA (ug/L) in an individual's blood serum, given characteristics of the individual, their tap water concentration & consumption. It performs a Monte Carlo simulation to introduce variation into 14 different variables that define an individual for simulation. This markdown file creates a figure of serum concentration sensitivities for a 6 month old female.
+
+### Set-up
+
+Define the plot title (plot_title) and the output file name (out_name). Based on the individual, set drop_vars to the variables that do not have any impact and therefore should not be plotted. Set the variable order (vars_order) for faceting subplots together. 
+
+```{r plot-settings}
+plot_title <- "6 month old female"
+out_name <- "6mo_Female"
+
+drop_vars <- c("conc_t1", "DWI", "MatRemove")
+vars_order = c("V[d] (L/kg)",  "T[1/2] (years)", "DWC (μg/L)", "BW (kg)",
+                        "LTF",  "C[bgd] (μg/L)", "Milk Clearance",
+                        "PTF", "Percent Tap (%)")
+```
+
+Checks that packages are installed, and install and load them if not.  
+
+```{r libraries}
+packages = c("here", # file referencing
+             "readxl", # reading excel files
+             "dplyr", # data manipulation
+             "purrr", # function mapping (pmap)
+             "ggplot2", # plotting
+             "matrixStats", # quantiles
+             "tictoc", # execution time
+             "lubridate", # used in mother's pathway
+             "grid", # faceting plots together
+             "gridExtra")  # facetting plots together 
+
+package.check <- lapply(
+  packages,
+  FUN = function(x) {
+    if (!require(x, character.only = TRUE)) {
+      install.packages(x, dependencies = TRUE, repos='http://cran.us.r-project.org')
+      library(x, character.only = TRUE)
+    }
+  }
+)
+rm(packages, package.check)
+```
+
+### Underlying data 
+
+This section of code loads all the tabs of the source file and will lookup values based on user set parameters. The following table describes the variables that are looked up
+
+Variable | Description 
+---------|-----------------------
+HL | Half-Life (years), used to calculate DecayPerStep  
+V_d | Volume of Distribution (1/kg), used to simulate chemicals in drinking water being distributed throughout the body
+MatRemove | Maternal Removal Rate, used to calculate CRBFPerStep (Mother's Clearance Rate from Breast Feeding)
+MatXfer | Maternal Transfer Rate, used to calculate BMC (Breast Milk Concenration)
+MilkClear | Milk Clearance Rate, used to calculate BMCRPerStep (Breast Milk Clearance Rate)
+PlacXfer | Placental Transfer, used to calculate infant starting serum. 
+BG_F, BG_M | Adult Background Serum, female and male respectively
+BG_Fk, BG_Mk | Child Background Serum, female and male respectively
+
+```{r load-data, message=FALSE}
+sourceData<-list()
+sheetnames<-excel_sheets(path=here("data", "source_PBPK.xlsx"))
+
+for (i in sheetnames){
+  data <- read_excel(here("data", "source_PBPK.xlsx"), sheet = i) 
+  sourceData[[i]]<-data
+  data <- NULL
+}
+
+rm(sheetnames, i, data)
+```
+
+### Monte Carlo Variables
+
+This section of code loads functions that create a dataframe of Monte Carlo variables that will be mapped as inputs into the master function. The following table describes their distribution assumptions
+
+Variable | Distribution | Mean | Standard Deviation | Description
+-----|-----|----|-----|-----------------
+DWIaf | Normal | 1 | 0.15 | Adjustment factor to Drinking Water Intake
+BW | Normal | user entered | 15% of the mean | Individual's current body weight (kg)
+HL | Lognormal | source file | source file | lookup based on chemical
+V_d | Lognormal | source file | source file | lookup based on chemical
+MatXfer | Normal | source file | 2% of the mean | lookup based on chemical
+MatRemove | Normal | source file | 2% of the mean | lookup based on chemical
+MilkClear | Normal | source file | 0.01 | lookup based on chemical
+PlacXfer | Normal |  source file | 2% of the mean | lookup based on chemical
+BkgdF | Lognormal |  source file | source file | lookup based on chemical
+BkgdM | Lognormal |  source file | source file |  lookup based on chemical
+BkgdFk | Lognormal |  source file | source file |  lookup based on chemical
+BkgdMk | Lognormal |  source file | source file |  lookup based on chemical
+concs | Normal | user entered | 15% of the means | Nested dataframe for each change in water concentration
+perc_tap | Normal | user entered | 15% of the means | Nested dataframe for each change in the percent of drinking water intake from tap water
+
+```{r MC-load}
+source(here("scripts","functions","distributions", "monte_carlo_vars.r"))
+source(here("scripts","functions","distributions", "icdf_distributions.r"))
+source(here("scripts","functions","distributions", "random_distributions.r"))
+source(here("scripts","functions","distributions", "shuffle_array.r"))
+source(here("scripts","functions","distributions", "make_rnd_stream.r")) 
+```
+
+### Sensitivity 
+
+This section of code loads functions that will run the sensitivity analysis and creates an output folder for plots
+
+```{r sens-load}
+# make a list of parameters - defaults set for 40 year old male and PFOA
+source(here("scripts", "analysis", "sensitivity", "param_make.r")) 
+# varies monte carlo parameters - defaults to PFOA, defines different function for each person 
+source(here("scripts", "analysis", "sensitivity", "mc_create_functions.r"))
+# plotting function
+source(here("scripts", "analysis", "sensitivity", "tornado_plot.r"))
+# run sensitivity through main_func
+source(here("scripts", "analysis", "sensitivity", "serum_sensitiv_runs.r"))
+
+last_row <-  function (dframe ) {dframe %>% ungroup () %>% slice_tail(n = 1)}
+
+# plots output to this folder
+if(!dir.exists(here("plots", "PBPK", Sys.Date(), out_name))){
+  dir.create(here("plots","PBPK", Sys.Date(), out_name), recursive = TRUE)
+}
+```
+
+### Master Function
+
+This section of code loads modeling functions. The master function constructs a dataframe for a single iteration of MC variables, populates it and performs the serum calculations. The output of a single iteration is a list including the entire dataframe as a result and a restatement of the parameters
+
+The following table defines the columns of the result dataframe:
+
+ Column | Description | Formula
+-------|------------|---------------------------------------------
+ Time | Exact model age (years)| Days/days_per_year
+ Years| Years old| floor(Days/days_per_year)
+ Months | Months old | floor(Days/days_per_month)
+ Days | Days old| seq(1,total_steps,timestep), where total_steps = ceiling((ed-sd)/timestep)
+ Date | Calendar date| seq(sd,ed,timestep)
+ DWC | Drinking Water Concentration| MC varied concs looked up with water_concs_dates and set to 0 before 1960
+ DWI | Drinking Water Intake| Mean DWI (looked up from source file) * MC varied DWI adjustment factor (DWIaf)
+ BW | Body Weight | MC varied BW and the creation_date are used to select the individual's weight percentile at the current age. BW over time is looked up by age from that percentile
+ Daily_Dose_DW | Daily Dose from Drinking Water| MC varied perc_tap looked up by date * (DWC/1000)*(DWI/1000)/BW. Set to 0 during breastfeeding and drinking store bought formula
+ Vd | Volume of distribution, for each time t | Age_adjust * MC varied V_d. Age_adjust is an adjustment factor for the volume of distribution in children, otherwise it is 1
+ Bkgd_serum | Background Serum | MC Varied BkgdF, BkgdM, BkgdFk, or BkgdMk when Days = 1, and a Time Step Adjustment (TSA) for Days > 1 to account for decay.
+ Daily_Dose_BM | Daily Dose of Breast Milk. Only used for breastfeeding infants during breastfeeding |  (BMC)*(BMI/1000)/BW_i, where BMC is Breast Milk Concentration, calculated using mother's steady state serum concentration and MC varied MatXfer; BMI is Mean Breast Milk Intake for the infant, looked up from the source file; and BW_i is the Median Body Weight of infants looked up from the source file which differs by gender.
+ Serum_b | Serum concentration before elimination | Bkgd_serum + TSA + timestep * (Daily_Dose_DW/Vd), for t = 1. For all t > 1, Serum_a[@t-1] + TSA + timestep * (Daily_Dose_DW/Vd). For infants this is initialized with the steady state value for mother's serum at the time of birth, using MC varied PlacXfer. The Serum_b calculation for infants includes an additional Daily_Dose_BM component. For adults, it is initialized with the background serum.
+ Serum_a | Serum concentration after elimination | Serum_b * DecayPerStep. While women are breastfeeding, we substitute CRBFPerStep for DecayPerStep to add additional decay for breast milk clearance. These are calculated with MC varied Halflife, MC varied MilkClearnance and MC varied MatRemove
+ id | Unique row identifier | 1:n
+
+```{r model-load}
+source(here("scripts","functions","populate_frame","create_frame.r")) 
+# creates initial dataframe with time/age variables
+source(here("scripts","functions","populate_frame", "pop_DWI_BMI.r"))   
+# populates drinking water intake and breast milk intake
+source(here("scripts","functions","populate_frame", "pop_BW.r")) 
+# populates body weight
+source(here("scripts","functions","populate_frame", "pop_DWC.r")) 
+# populates drinking water concs
+source(here("scripts","functions","populate_frame", "pop_AA_VD.r")) 
+# populates Volume of distribution with  age adjustment factor 
+source(here("scripts","functions","populate_frame", "pop_BG.r")) 
+# populates background serum
+
+source(here("scripts", "functions", "populate_frame", "age_adjust.r")) 
+# helper function for looking up age adjustment factor
+
+source(here("scripts","functions", "serum_calculations","serum_calc.r")) 
+# wrapper function for other serum calc functions
+source(here("scripts","functions", "serum_calculations","bf_days.r")) 
+# which days is there breastfeeding?
+source(here("scripts","functions", "serum_calculations","daily_dose_BM.r")) 
+# how much PFAS is transferred each timestep through breast milk?
+source(here("scripts","functions", "serum_calculations","recursive_serum.r")) 
+# recursive formula for calculating serum
+
+source(here("scripts","functions", "main_function.r"))
+# serum simulation wrapper function
+```
+
+### Run Model
+
+#### Make Parameters
+
+The other chemicals will use this parameter list and just change the chemical
+
+```{r param}
+days_per_year <- 365.2425
+days_per_month <- days_per_year/12
+  
+param_list_PFOA_ucmr5 <-   param_make(chemical = "PFOA", 
+                                    water_concs = c(.1, 0.005), # concentrations in tap water (ug/L)
+                                    water_concs_dates = c("1960-1-1", "2020-1-1"), 
+                                    perc_tap = c(.9), 
+                                    gender = "Female", 
+                                    BW = 7.45, niter = 1, timestep = 30, # BW = p50 @ age 6 months in source file
+                                    sd =  as.Date("2021-06-1"), # start date of simulation, 
+                                                                # simulated individuals birthdate (YYYY-MM-DD)
+                                    ed = as.Date("2022-01-01"),
+                                    fed_most = "breast milk",
+                                    fed_mo = 6)
+```
+
+#### Calculating 5th and 95th percentiles
+
+This section of code gives an example for how the 5th and 95th percentile values were calculated. Values are hard-coded in the mc_create functions for PFOA and entered as inputs for other chemicals. 
+
+```{r 5-95, eval=FALSE}
+param_list_PFOA_ucmr5$niter = 1000
+MC_vars <- monte_carlo_vars( param_list = param_list_PFOA_ucmr5, sourceData = sourceData )
+quantile(MC_vars$BkgdF, c(0.05, 0.5, 0.95)) ;
+quantile(MC_vars$MatRemove, c(0.05, 0.5, 0.95)) ;
+quantile(MC_vars$MilkClearance, c(0.05, 0.5, 0.95));
+quantile(MC_vars$PlacXfer, c(0.05, 0.5, 0.95))  
+param_list_PFOA_ucmr5$niter = 1
+```
+
+#### PFOA 
+
+Create PFOA sensitivity subplot
+Customized tornado plot call with input  together = c("Percent Tap (%)"). This input pastes the labels together in one string to avoid over plotting. 
+
+```{r PFOA}
+
+
+pfoa <- mc_create_child( plist = param_list_PFOA_ucmr5, Sex = param_list_PFOA_ucmr5$gender, 
+                      sourceData = sourceData)
+
+results_pfoa <-serum_sensitiv_runs(sensivary= pfoa , 
+                                   plist = param_list_PFOA_ucmr5, 
+                                   sourceData = sourceData , 
+                                   pfas = param_list_PFOA_ucmr5$chemical )
+
+results_pfoa1 <-  results_pfoa %>%  ungroup()%>%
+  mutate(iter = as.character(iter), conc_t1 =  signif(conc_t1, 3), 
+         conc_t2 = signif(conc_t2, 3) 
+         # correct significant digits issue introduced in mc function for concentrations. 
+         ) %>%   
+  select(-starts_with("date"), -out_BW)
+
+# drop non-applicable Background columns 
+if(param_list_PFOA_ucmr5$gender == "Female"){
+  if(as.numeric(param_list_PFOA_ucmr5$ed- param_list_PFOA_ucmr5$sd) / days_per_year < 12){
+    results_pfoa1 <- results_pfoa1 %>% select(-starts_with("BkgdM"), - BkgdF) %>% rename("Bkgd" = "BkgdFk") 
+  }else{
+    results_pfoa1 <- results_pfoa1 %>% select(-starts_with("BkgdM"), - BkgdFk) %>% rename("Bkgd" = "BkgdF") 
+  }
+}else{
+  if(as.numeric(param_list_PFOA_ucmr5$ed- param_list_PFOA_ucmr5$sd) / days_per_year < 12){
+    results_pfoa1 <- results_pfoa1 %>% select(-starts_with("BkgdF"), - BkgdM) %>% rename("Bkgd" = "BkgdMk")
+  }else{
+    results_pfoa1 <- results_pfoa1 %>% select(-starts_with("BkgdF"), - BkgdMk) %>% rename("Bkgd" = "BkgdM")
+  }
+}
+
+results_pfoa <- results_pfoa1 %>% tidyr::pivot_longer(c(BW:DWI), names_to = "var") %>% 
+  group_by(  var) %>% 
+  mutate(level = case_when(value == min(value) ~ "low", 
+                           value == max(value) ~ "high" 
+                           , TRUE ~ "mid"),
+         level = ordered(level, c("low", "mid", "high")))
+
+
+# drop columns with no impact 
+dframe <- results_pfoa %>% 
+  filter(level != "mid" & !(var %in% drop_vars)) 
+
+# plot
+g <- ggtornado(data = dframe, baseline = 3.229338,
+          var = "var", level = "level", value = "value", result = "pred_serum_ug_L",
+          Bkgd = 1.89681023, together = c("Percent Tap (%)"),
+          var_order = vars_order) 
+
+PFOA <- g+ ggtitle( "PFOA") + theme(plot.title = element_text(hjust = 0.5, size = 16))
+PFOA
+
+png(filename = here("plots","PBPK", Sys.Date(), out_name,
+                    paste0("PFOA_", format(Sys.time(), "%H-%M"),".png")),
+        width = 10, height  = 5, units = "in", res = 100)
+grid.draw(PFOA)
+dev.off()
+
+```
+
+#### PFOS 
+
+Create PFOS sensitivity subplot
+Customized tornado plot call with line_label = FALSE. This input controls whether the NHANES Mean Background Serum label is printed.
+
+```{r PFOS}
+rm(results_pfoa, results_pfoa1,  pfoa)
+param_list_PFOS_ucmr5 <-   param_list_PFOA_ucmr5
+param_list_PFOS_ucmr5$chemical <- "PFOS"
+
+pfos <- mc_create_child( plist = param_list_PFOS_ucmr5, Sex = param_list_PFOS_ucmr5$gender,
+                      sourceData = sourceData , pfas = param_list_PFOS_ucmr5$chemical,
+                      HL_range =  c(2.2, 3.36, 10.6) , 
+                      V_d_range =  c(0.23, 0.32, 0.47),
+                      Bkgd_range = c(1.64,3.699068318, 8.34), 
+                      MatXfer_range = c(.0126,0.013,.022), 
+                      MilkClear_range = c(0.1, 0.118,.13), 
+                      PlacXfer_range = c(0.4, 0.42, 0.43))
+
+results_pfos <-serum_sensitiv_runs(sensivary= pfos , 
+                                         plist = param_list_PFOS_ucmr5, 
+                                         sourceData = sourceData , 
+                                         pfas = param_list_PFOS_ucmr5$chemical )
+
+results_pfos1 <-  results_pfos %>%  ungroup()%>%
+  mutate(iter = as.character(iter), conc_t1 =  signif(conc_t1, 3), 
+         conc_t2 = signif(conc_t2, 3) ) %>% 
+         # correct significant digits issue introduced in mc function for concentrations. 
+           
+  select(-starts_with("date"), - out_BW)
+
+# drop non-applicable Background columns 
+if(param_list_PFOS_ucmr5$gender == "Female"){
+  if(as.numeric(param_list_PFOS_ucmr5$ed- param_list_PFOS_ucmr5$sd) / days_per_year < 12){
+    results_pfos1 <- results_pfos1 %>% select(-starts_with("BkgdM"), - BkgdF) %>% rename("Bkgd" = "BkgdFk") 
+  }else{
+    results_pfos1 <- results_pfos1 %>% select(-starts_with("BkgdM"), - BkgdFk) %>% rename("Bkgd" = "BkgdF") 
+  }
+}else{
+  if(as.numeric(param_list_PFOS_ucmr5$ed- param_list_PFOS_ucmr5$sd) / days_per_year < 12){
+    results_pfos1 <- results_pfos1 %>% select(-starts_with("BkgdF"), - BkgdM) %>% rename("Bkgd" = "BkgdMk")
+  }else{
+    results_pfos1 <- results_pfos1 %>% select(-starts_with("BkgdF"), - BkgdMk) %>% rename("Bkgd" = "BkgdM")
+  }
+}
+
+results_pfos <- results_pfos1 %>% tidyr::pivot_longer(c(BW:DWI), names_to = "var") %>% 
+  group_by(  var) %>% 
+  mutate(level = case_when(value == min(value) ~ "low", 
+                           value == max(value) ~ "high" 
+                           , TRUE ~ "mid"),
+         level = ordered(level, c("low", "mid", "high")))
+
+dframe <- results_pfos %>% 
+  filter(level != "mid" & !(var %in% drop_vars))
+
+# 3.905498 and 3.905499 appear in baseline, so we round to 3.90550
+g <- ggtornado(data = dframe, baseline = 3.9055,
+          var = "var", level = "level", value = "value", result = "pred_serum_ug_L",
+          Bkgd = 3.699068318, line_label = F,
+          var_order = vars_order)
+
+PFOS <- g+ ggtitle( "PFOS") + theme(plot.title = element_text(hjust = 0.5, size = 16))
+PFOS
+# outputs can be lower than the Bkgd because we take 80% of NHANES value
+png(filename = here("plots","PBPK", Sys.Date(), out_name,
+                    paste0("PFOS_", format(Sys.time(), "%H-%M"),".png")),
+        width = 10, height  = 5, units = "in", res = 100)
+grid.draw(PFOS)
+dev.off()
+
+```
+
+#### PFHxS
+
+Create PFHxS sensitivity subplot
+Customized tornado plot call with input together = c("C[bgd] (μg/L)", "Milk Clearance", "Percent Tap (%)"). This input pastes the labels together in one string to avoid over plotting. 
+
+```{r PFHxS}
+rm(results_pfos, results_pfos1,  pfos)
+param_list_PFHxS_ucmr5 <-   param_list_PFOA_ucmr5
+param_list_PFHxS_ucmr5$chemical <- "PFHxS"
+
+pfhxs <- mc_create_child( plist = param_list_PFHxS_ucmr5, Sex = param_list_PFHxS_ucmr5$gender, 
+                      sourceData = sourceData , pfas = param_list_PFHxS_ucmr5$chemical,
+                      HL_range =  c(2.4, 8.3, 13.5) , 
+                      V_d_range =  c(0.15, 0.29, 0.45),
+                      Bkgd_range = c(0.25, 0.756904737, 2.24 ),
+                      MatXfer_range = c(0.0135,0.014,.033), 
+                      MilkClear_range = c(0.11, 0.127,.14), 
+                      PlacXfer_range = c(0.67, 0.7, 0.72))
+
+results_pfhxs <-serum_sensitiv_runs(sensivary= pfhxs , 
+                                         plist = param_list_PFHxS_ucmr5, 
+                                         sourceData = sourceData , 
+                                         pfas = param_list_PFHxS_ucmr5$chemical)
+
+results_pfhxs1 <-  results_pfhxs %>%  ungroup() %>%
+  mutate(iter = as.character(iter), conc_t1 =  signif(conc_t1, 3), 
+         conc_t2 = signif(conc_t2, 3)  ) %>%  
+         # correct significant digits issue introduced in mc function for concentrations. 
+  select(-starts_with("date"), - out_BW)
+
+# drop non-applicable Background columns 
+if(param_list_PFHxS_ucmr5$gender == "Female"){
+  if(as.numeric(param_list_PFHxS_ucmr5$ed- param_list_PFHxS_ucmr5$sd) / days_per_year < 12){
+    results_pfhxs1 <- results_pfhxs1 %>% select(-starts_with("BkgdM"), - BkgdF) %>% rename("Bkgd" = "BkgdFk") 
+  }else{
+    results_pfhxs1 <- results_pfhxs1 %>% select(-starts_with("BkgdM"), - BkgdFk) %>% rename("Bkgd" = "BkgdF") 
+  }
+}else{
+  if(as.numeric(param_list_PFHxS_ucmr5$ed- param_list_PFHxS_ucmr5$sd) / days_per_year < 12){
+    results_pfhxs1 <- results_pfhxs1 %>% select(-starts_with("BkgdF"), - BkgdM) %>% rename("Bkgd" = "BkgdMk")
+  }else{
+    results_pfhxs1 <- results_pfhxs1 %>% select(-starts_with("BkgdF"), - BkgdMk) %>% rename("Bkgd" = "BkgdM")
+  }
+}  
+
+results_pfhxs <- results_pfhxs1 %>% 
+  tidyr::pivot_longer(c(BW:DWI, "Bkgd"), names_to = "var") %>% 
+  group_by(  var) %>% 
+  mutate(level = case_when(value == min(value) ~ "low", 
+                           value == max(value) ~ "high" 
+                           , TRUE ~ "mid"),
+         level = ordered(level, c("low", "mid", "high")))
+
+dframe <- results_pfhxs %>% 
+  filter(level != "mid" & !(var %in% drop_vars)) 
+
+# both 3.231228 & 3.231229 appear in the baseline runs, so we round to 3.23123
+g <- ggtornado(data = dframe, baseline = 3.342806,
+          var = "var", level = "level", value = "value", result = "pred_serum_ug_L", 
+          Bkgd = 0.756904737, together = c("C[bgd] (μg/L)", "Milk Clearance", "Percent Tap (%)"),
+          var_order = vars_order)
+
+PFHxS <- g+ ggtitle( "PFHxS")+ theme(plot.title = element_text(hjust = 0.5, size = 16))
+PFHxS
+
+png(filename = here("plots","PBPK", Sys.Date(), out_name,
+                    paste0("PFHxS_", format(Sys.time(), "%H-%M"),".png")),
+        width = 10, height  = 5, units = "in", res = 100)
+grid.draw(PFHxS)
+dev.off()
+
+```
+
+#### PFNA 
+
+Create PFNA sensitivity subplot
+Customized tornado plot call with input together = c("PTF", "C[bgd] (μg/L)", "Percent Tap (%)", "BW (kg)", "Milk Clearance"). This input pastes the labels together in one string to avoid over plotting. The input h_just = 0 shifts the bar labels to the right to avoid over plotting.
+
+```{r PFNA}
+rm(results_pfhxs, results_pfhxs1,  pfhxs)
+param_list_PFNA_ucmr5 <-   param_list_PFOA_ucmr5
+param_list_PFNA_ucmr5$chemical <- "PFNA"
+
+pfna <- mc_create_child( plist = param_list_PFNA_ucmr5, Sex = param_list_PFNA_ucmr5$gender, 
+                      sourceData = sourceData , pfas = param_list_PFNA_ucmr5$chemical,
+                      HL_range =  c(1.9, 2.35, 9.5) , 
+                      V_d_range =  c(0.1, 0.19, 0.3),
+                      Bkgd_range = c(0.28, 0.758818721, 2.07 ),
+                      MatXfer_range = c(.009,.01,.14), 
+                      MilkClear_range = c(0.074, 0.0903,.11), 
+                      PlacXfer_range = c(0.512, 0.53, 0.94))
+
+results_pfna <-serum_sensitiv_runs(sensivary= pfna , 
+                                   plist = param_list_PFNA_ucmr5, 
+                                   sourceData = sourceData , 
+                                   pfas = param_list_PFNA_ucmr5$chemical )
+
+results_pfna1 <-  results_pfna %>%  ungroup() %>%
+  mutate(iter = as.character(iter), conc_t1 =  signif(conc_t1, 3), 
+         conc_t2 = signif(conc_t2, 3) 
+         # correct significant digits issue introduced in mc function for concentrations. 
+         ) %>%   
+    select(-starts_with("date"), - out_BW)
+
+# drop non-applicable Background columns 
+if(param_list_PFNA_ucmr5$gender == "Female"){
+  if(as.numeric(param_list_PFNA_ucmr5$ed- param_list_PFNA_ucmr5$sd) / days_per_year < 12){
+    results_pfna1 <- results_pfna1 %>% select(-starts_with("BkgdM"), - BkgdF) %>% rename("Bkgd" = "BkgdFk") 
+  }else{
+    results_pfna1 <- results_pfna1 %>% select(-starts_with("BkgdM"), - BkgdFk) %>% rename("Bkgd" = "BkgdF") 
+  }
+}else{
+  if(as.numeric(param_list_PFNA_ucmr5$ed- param_list_PFNA_ucmr5$sd) / days_per_year < 12){
+    results_pfna1 <- results_pfna1 %>% select(-starts_with("BkgdF"), - BkgdM) %>% rename("Bkgd" = "BkgdMk")
+  }else{
+    results_pfna1 <- results_pfna1 %>% select(-starts_with("BkgdF"), - BkgdMk) %>% rename("Bkgd" = "BkgdM")
+  }
+}
+
+results_pfna <- results_pfna1 %>% tidyr::pivot_longer(c(BW:perc_tap1, DWI), names_to = "var") %>% 
+  group_by(  var) %>% 
+  mutate(level = case_when(value == min(value) ~ "low", 
+                           value == max(value) ~ "high" 
+                           , TRUE ~ "mid"),
+         level = ordered(level, c("low", "mid", "high")))
+
+dframe <- results_pfna %>% 
+  filter(level != "mid" & !(var %in% drop_vars))
+
+# 1.3813677 and 1.3813678 appear in baseline, so we round to 1.381368
+g <- ggtornado(data = dframe, baseline = 1.381368,
+          var = "var", level = "level", value = "value", result = "pred_serum_ug_L",
+          Bkgd = 0.758818721, h_just = 0, together = c("PTF", "C[bgd] (μg/L)", "Percent Tap (%)", 
+                                                       "BW (kg)", "Milk Clearance"),
+          var_order = vars_order)
+
+PFNA <- g+ ggtitle( "PFNA") + theme(plot.title = element_text(hjust = 0.5, size = 16))
+PFNA
+png(filename = here("plots","PBPK", Sys.Date(), out_name,
+                    paste0("PFNA_", format(Sys.time(), "%H-%M"),".png")),
+        width = 10, height  = 5, units = "in", res = 100)
+grid.draw(PFNA)
+dev.off()
+
+```
+
+Grid facet plots together
+
+```{r grid-facet}
+rm(results_pfna, results_pfna1, pfna)
+
+PFOS_1 <- PFOS+ theme(axis.text.y=element_blank(), 
+                          axis.ticks.y=element_blank(), 
+                          axis.title.y = element_blank())
+PFNA_1 <- PFNA + theme(axis.text.y=element_blank(), 
+                          axis.ticks.y=element_blank(), 
+                          axis.title.y = element_blank())
+
+joined_plot <- grid.arrange(PFOA, PFOS_1, PFHxS, PFNA_1, nrow = 2, 
+                    top = textGrob(plot_title, gp=gpar(fontsize=21,font=8)))
+
+png(filename = here("plots","PBPK", Sys.Date(), paste0(out_name,".png")),
+        width = 20, height  = 9, units = "in", res = 100)
+grid.draw(joined_plot)
+dev.off()
+```
+
+### Session Info
+
+For reproducibility, output the session info. Will provide system information, as well as information about package versions and R versions. 
+```{r session-info}
+print(devtools::session_info())
+```

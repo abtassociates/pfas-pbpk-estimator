@@ -1,0 +1,17 @@
+.Rproj.user
+.Rhistory
+*.RData
+.Ruserdata
+*.Rproj
+*.html
+*.png
+*.out
+plots/*
+input/*
+output/*
+*.orig
+*.docx
+*.zip
+scripts/functions/main_function.tex
+scripts/old/
+*.json

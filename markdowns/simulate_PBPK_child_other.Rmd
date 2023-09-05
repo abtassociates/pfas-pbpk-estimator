@@ -1,0 +1,291 @@
+---
+title: "PBPK Model of PFAS Chemicals in Blood Serum - Child fed store bought formula"
+author: "Insert Author Name"
+date: "`r format(Sys.time(), '%F')`"
+knit: (function(inputFile, encoding) {outdir = file.path(dirname(inputFile), 'markdown', paste0(format(Sys.time(), '%F'))); if(!dir.exists(outdir)){dir.create(outdir, recursive = TRUE)}; rmarkdown::render(inputFile, encoding = encoding, output_format = 'all', output_dir = outdir) })
+output:
+  word_document: default
+  html_document:
+    code_folding: hide
+    df_print: kable
+    toc: yes
+    toc_depth: 5
+---
+
+The purpose of this model is to calculate the amount of PFAS, PFOA, PFHxS or PFNA (ug/L) in an individual's blood serum, given characteristics of the individual, their tap water concentration & consumption. It performs a Monte Carlo simulation to introduce variation into 14 different variables that define an individual for simulation. This specific example shows PFOA estimation for a child fed pre-mixed formula (not mixed with tap-water). 
+
+### Set-up
+
+First, set 'save_output'. If this is set to 'TRUE', simulation results will be saved out to an .Rdata file, otherwise, only test plots will be created in the 'plots' folder
+
+```{r toggle-save-output}
+save_output <- FALSE
+```
+
+Checks that packages are installed, and install and load them if not.  
+
+```{r libraries}
+packages = c("here", # file location referencing
+             "readxl", # read excel files
+             "dplyr", # data manipulation
+             "purrr", # pmap function
+             "ggplot2", # plotting
+             "matrixStats", # row quantiles
+             "tictoc") # execution time
+
+package.check <- lapply(
+  packages,
+  FUN = function(x) {
+    if (!require(x, character.only = TRUE)) {
+      install.packages(x, dependencies = TRUE, repos='http://cran.us.r-project.org')
+      library(x, character.only = TRUE)
+    }
+  }
+)
+```
+
+### User Set Parameters
+
+This section of code allows users to change settings of the model. The following table defines the parameters
+
+Variable | Description
+---------|----------------------
+chemical | "PFOA", "PFOS", "PFNA", or "PFHxS"
+water_concs | water concentrations (ug/L) for each date
+water_concs_dates | dates to apply changes to water concentration   
+perc_tap | percent of daily water intake that comes from tap water as a fraction (e.g. 90% - .9)
+perc_tap_dates | dates to apply changes to perc_tap
+gender | "Female" or "Male"
+BW | body weight (kg)
+fed_most | "breast milk", "tap water", or "other formula", represents whether the user was mostly breast fed, fed formula made with tap water, or other store bought formula. 
+fed_mo | number of months after birth they were fed mostly fed_most
+mom_pct_tap | the mother's percent of water intake from tap water during pregnancy and breastfeeding
+numChild | number of children 
+child_gender | "Female" or "Male", represents each child's gender
+child_bday | each child's birthday
+child_bf | TRUE or FALSE, represents whether each child was breastfed.
+creation_date | manual override for matching calculations run on previous days, defaults to today's date
+niter | number of Monte Carlo iterations 
+timestep | number of days between calculations
+sd | start date, the individual's birthday
+ed | end date, the last date to simulate. May not be exact due to timestep
+
+```{r set-param}
+# the user sets 
+param_list <- list(chemical = "PFOA", # PFAS chemical
+                   water_concs = c(.25,.02), # concs in tap water (ug/L)
+                   water_concs_dates = c("1990-1-1", "2020-1-1"), 
+                   # dates water_concs sampled
+                   
+                   perc_tap = c(.9,.25), 
+                   # percent drinking water intake from tap water 
+                   perc_tap_dates = c("1900-1-1", "2021-1-1"), 
+                   # initialized in 1900, date the perc_tap changed
+                   
+                   # mother's percent drinking water intake from tap water 
+                   # during pregnancy and breastfeeding. If NA, assume 100%
+                   mom_pct_tap = 1,
+                   
+                   gender = "Male", # user gender
+                   BW = 46, # user current body weight (kg) (on the )
+                   
+                   # If you are a child: (ignored if over 6 years old)
+                   
+                   fed_most = "other formula", # user was fed mostly "breast milk", 
+                   # "tap water", or "other formula" when they were an infant. 
+                   fed_mo = 12, # for how many months? (ignored when fed_most = "tap water")
+                   # default 6 months for breastfeeding (max value)
+                   # default 12 months for other formula (not a maximum)
+                   
+                   # If you are a mother: (ignored if gender = Male or numChild = 0)
+                   numChild = 0, # number of user's children
+                   child_gender = c(NA), # children's genders
+                   child_bday = c(NA), # children's birthdays
+                   child_bf_mo = c(NA), # number of months child was breastfed. 
+                   
+                   creation_date = Sys.Date(),  # date output created
+                   niter = 10, # number of Monte Carlo iterations for simulation. Recommendation: set to 10 for initial testing, and to 1000 for full simulation. Values over 1000 not recommended to avoid intensive computing.  
+                   timestep = 30, # Length of timestep (days between calculations). 30 day timestep is recommended for ease of simulation. Shorter timesteps are slower to run. 
+                   sd = as.Date("2018-1-1"), # start date of simulation, user's birthdate   (yyyy-m-d)
+                   ed = as.Date("2022-12-31")) # end date of simulation
+```
+
+### Underlying data 
+
+This section of code loads all the tabs of the source file and uses user set parameters to lookup values. The following table describes the variables that were looked up
+
+Variable | Description 
+---------|-----------------------
+HL | Half-Life (years), used to calculate DecayPerStep  
+V_d | Volume of Distribution (1/kg), used to simulate chemicals in drinking water being distributed throughout the body
+MatRemove | Maternal Removal Rate, used to calculate CRBFPerStep (Mother's Clearance Rate from Breast Feeding)
+MatXfer | Maternal Transfer Rate, used to calculate BMC (Breast Milk Concenration)
+MilkClear | Milk Clearance Rate, used to calculate BMCRPerStep (Breast Milk Clearance Rate)
+PlacXfer | Placental Transfer, used to calculate infant starting serum. 
+BG_F, BG_M | Adult Background Serum, female and male respectively
+BG_Fk, BG_Mk | Child Background Serum, female and male respectively
+
+```{r load-data, message=FALSE}
+sourceData<-list()
+sheetnames<-excel_sheets(path=here("data", "source_PBPK.xlsx"))
+
+for (i in sheetnames){
+  data <- read_excel(here("data", "source_PBPK.xlsx"), sheet = i) 
+  sourceData[[i]]<-data
+  data <- NULL
+}
+```
+
+### Monte Carlo Variables
+
+This section of code creates a dataframe of Monte Carlo variables that will be mapped as inputs into the master function. The following table describes their distribution assumptions
+
+Variable | Distribution | Mean | Standard Deviation | Description
+-----|-----|----|-----|-----------------
+DWIaf | Normal | 1 | 0.15 | Adjustment factor to Drinking Water Intake
+BW | Normal | user entered | 15% of the mean | Individual's current body weight (kg)
+HL | Lognormal | source file | source file | lookup based on chemical
+V_d | Lognormal | source file | source file | lookup based on chemical
+MatXfer | Normal | source file | 2% of the mean | lookup based on chemical
+MatRemove | Normal | source file | 2% of the mean | lookup based on chemical
+MilkClear | Normal | source file | 0.01 | lookup based on chemical
+PlacXfer | Normal |  source file | 2% of the mean | lookup based on chemical
+BkgdF | Lognormal |  source file | source file | lookup based on chemical
+BkgdM | Lognormal |  source file | source file |  lookup based on chemical
+BkgdFk | Lognormal |  source file | source file |  lookup based on chemical
+BkgdMk | Lognormal |  source file | source file |  lookup based on chemical
+concs | Normal | user entered | 15% of the means | Nested dataframe for each change in water concentration
+perc_tap | Normal | user entered | 15% of the means | Nested dataframe for each change in the percent of drinking water intake from tap water
+
+```{r MC}
+source(here("scripts","functions","distributions", "monte_carlo_vars.r"))
+source(here("scripts","functions","distributions", "icdf_distributions.r"))
+source(here("scripts","functions","distributions", "random_distributions.r"))
+source(here("scripts","functions","distributions", "shuffle_array.r"))
+source(here("scripts","functions","distributions", "make_rnd_stream.r"))
+
+# Creates random variable streams from R model parameters, formatted to enter the main_func
+MC_vars <- monte_carlo_vars( param_list = param_list, sourceData = sourceData )
+```
+
+### Master Function
+
+The master function constructs a dataframe for a single iteration of MC variables, populates it and performs the serum calculations. The output of a single iteration is a list including the entire dataframe as a result and a restatement of the parameters
+
+The following table defines the columns of the result dataframe:
+
+ Column | Description | Formula
+-------|------------|---------------------------------------------
+ Time | Exact model age (years)| Days/days_per_year
+ Years| Years old| floor(Days/days_per_year)
+ Months | Months old | floor(Days/days_per_month)
+ Days | Days old| seq(1,total_steps,timestep), where total_steps = ceiling((ed-sd)/timestep)
+ Date | Calendar date| seq(sd,ed,timestep)
+ DWC | Drinking Water Concentration| MC varied concs looked up with water_concs_dates and set to 0 before 1960
+ DWI | Drinking Water Intake| Mean DWI (looked up from source file) * MC varied DWI adjustment factor (DWIaf)
+ BW | Body Weight | MC varied BW and the creation_date are used to select the individual's weight percentile at the current age. BW over time is looked up by age from that percentile
+ Daily_Dose_DW | Daily Dose from Drinking Water| MC varied perc_tap looked up by date * (DWC/1000)*(DWI/1000)/BW. Set to 0 during breastfeeding and drinking store bought formula
+ Vd | Volume of distribution, for each time t | Age_adjust * MC varied V_d. Age_adjust is an adjustment factor for the volume of distribution in children, otherwise it is 1
+ Bkgd_serum | Background Serum | MC Varied BkgdF, BkgdM, BkgdFk, or BkgdMk when Days = 1, and a Time Step Adjustment (TSA) for Days > 1 to account for decay.
+ Daily_Dose_BM | Daily Dose of Breast Milk. Only used for breastfeeding infants during breastfeeding |  (BMC)*(BMI/1000)/BW_i, where BMC is Breast Milk Concentration, calculated using mother's steady state serum concentration and MC varied MatXfer; BMI is Mean Breast Milk Intake for the infant, looked up from the source file; and BW_i is the Median Body Weight of infants looked up from the source file which differs by gender.
+ Serum_b | Serum concentration before elimination | Bkgd_serum + TSA + timestep * (Daily_Dose_DW/Vd), for t = 1. For all t > 1, Serum_a[@t-1] + TSA + timestep * (Daily_Dose_DW/Vd). For infants this is initialized with the steady state value for mother's serum at the time of birth, using MC varied PlacXfer. The Serum_b calculation for infants includes an additional Daily_Dose_BM component. For adults, it is initialized with the background serum.
+ Serum_a | Serum concentration after elimination | Serum_b * DecayPerStep. While women are breastfeeding, we substitute CRBFPerStep for DecayPerStep to add additional decay for breast milk clearance. These are calculated with MC varied Halflife, MC varied MilkClearnance and MC varied MatRemove
+ id | Unique row identifier | 1:n
+
+### Run Model
+
+```{r run, results='hide'}
+source(here("scripts","functions","populate_frame","create_frame.r")) 
+# creates initial dataframe with time/age variables
+source(here("scripts","functions","populate_frame", "pop_DWI_BMI.r")) 
+# populates drinking water intake and breast milk intake
+source(here("scripts","functions","populate_frame", "pop_BW.r")) 
+# populates body weight
+source(here("scripts","functions","populate_frame", "pop_DWC.r")) 
+# populates drinking water concs
+source(here("scripts","functions","populate_frame", "pop_AA_VD.r")) 
+# populates Volume of distribution with  age adjustment factor 
+source(here("scripts","functions","populate_frame", "pop_BG.r")) 
+# populates background serum
+
+source(here("scripts", "functions", "populate_frame", "age_adjust.r")) 
+# helper function for looking up age adjustment factor
+
+source(here("scripts","functions", "serum_calculations","serum_calc.r")) 
+# wrapper function for other serum calc functions
+source(here("scripts","functions", "serum_calculations","bf_days.r")) 
+# which days is there breastfeeding?
+source(here("scripts","functions", "serum_calculations","daily_dose_BM.r")) 
+# how much PFAS is transferred each timestep through breast milk?
+source(here("scripts","functions", "serum_calculations","recursive_serum.r")) 
+# recursive formula for calculating serum
+
+source(here("scripts","functions", "main_function.r"))
+# serum simulation wrapper function
+tic()
+results <- pmap(MC_vars, main_func, parameter_list =  param_list, 
+                source_data =  sourceData, full = TRUE ) 
+# without the argument full = TRUE, only the last timestep will be returned. This is used in keeping object sizes small in model validation when running many individuals. To plot over over time, we must have all timesteps.
+toc()
+```
+
+This plot is saved to folder 
+
+```{r sum-plot}
+print(here("plots","PBPK", Sys.Date()))
+if(!dir.exists(here("plots", "PBPK", Sys.Date()))){
+  dir.create(here("plots","PBPK", Sys.Date()), recursive = TRUE)
+}
+
+res_df <- NULL
+
+for (i in 1:param_list$niter){
+  cols <- colnames(res_df)
+  res_df <- cbind(res_df, results[[i]]$Serum_a)
+  colnames(res_df) <- c(cols, paste0("iter",i))
+}
+
+res_sum <- rowQuantiles(res_df , probs = c(0.05, 0.95)) %>% as.data.frame()
+
+# rowSums(res_df) / nrow(res_df)
+res_sum$Median <- rowMedians(res_df)# Row Means functions were buggy
+res_sum$Date <- results[[1]]$Date %>% as.Date(origin = "1970-1-1")
+colnames(res_sum) <- c("lbound", "ubound", "Mean", "Date")
+
+title <- paste("Blood Serum Concentration of", param_list$chemical)
+time_plot <- ggplot(res_sum, aes(x = Date)) + geom_line(aes(y=Mean )) +
+  geom_line(aes(y=ubound), linetype = "dashed") + 
+  geom_line(aes(y=lbound), linetype = "dashed") +
+  labs(x="Year", y="Blood Serum Concentration (ug/L)", title = title) 
+time_plot
+
+
+ggsave(here("plots","PBPK", Sys.Date(),paste0(param_list$chemical,"_",
+                                              format(Sys.time(), "%H-%M"),".png")), time_plot)
+
+```
+
+### Save simulation results
+
+The following code can be used to save output and load it back in. Only run if 'save_output' is set to TRUE. 
+
+```{r save-rdata-out }
+if(save_output) {
+  
+  if(!dir.exists(here("output", "PBPK", Sys.Date()))){
+    dir.create(here("output","PBPK", Sys.Date()), recursive = TRUE)
+  }
+  
+save(results, file = here("output", "PBPK", Sys.Date(), "PBPK_Child_Other.Rdata"))
+load(file = here("output", "PBPK", Sys.Date(), "PBPK_Child_Other.Rdata"))
+PBPK_Results <- results; rm(results) 
+}
+```
+
+### Session Info
+
+For reproducibility, output the session info. Will provide system information, as well as information about package versions and R versions.
+
+```{r session-info}
+print(devtools::session_info())
+```
